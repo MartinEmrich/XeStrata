@@ -34,6 +34,8 @@ setup は、GPU と RAM と CPU を確かめ、SYCL のコンパイラを選ん�
 **次からは** `./setup.sh` を実行すると、すぐに起動します。
 README にある `xestrata` のオプションは、`./setup.sh` でも同じです。端末での会話は `.venv/bin/python chat.py` です。
 
+setup が名前にないエンジンのオプションは `--` の後に書きます。`./setup.sh --model Q2_0 --no-start -- --kv-resident 20480 --conversation-save DIR` は、それらを setup の選択の後でモデルの args の末尾に足します。同じフラグが二度あるとき、エンジンは後の値を使います。通常の起動はそれらをそのまま使い、`--` のない setup の実行はそれらを落とし、名前を挙げます。
+
 **更新**: `./update.sh` を実行します。git で取得したものなら `git pull` してから、エンジンと Python のパッケージと
 モデルの設定を更新します（モデルは起動しません）。新しい版をダウンロードして別の場所に展開し、そこで `./setup.sh` を
 実行しても構いません。新しいコピーも `XeStrata-data` を見つけて、同じ設定で動きます。

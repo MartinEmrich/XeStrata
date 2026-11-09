@@ -42,6 +42,10 @@ encoder Qwen3.5-9B; --image-quant Q4_K_M|Q6_K|Q8_0 (Qwen-Image) or w4a8|int8 (Hu
 auto|on|off (Mage-Flow, MOSS-Image) and --image-dit-keep on|off (Mage-Flow), --image-ssd-offload on|off,
 --image-gpu-policy auto|keep|shrink|unload).
 
+Engine options setup does not name go after a --: ./setup.sh --model Q2_0 --no-start -- --kv-resident 20480
+--conversation-save DIR appends them to the model's args after setup's own, where the engine's last-wins parsing
+makes them effective.  An ordinary start keeps them; a setup run without the -- suffix drops them and names them.
+
 Setup recommends, it never forces: the recommended answers are the defaults (--yes, or Enter), and a bigger choice
 than it recommends - a longer context, a size it thinks will not fit - is kept, with what it risks.  With --yes, an
 explicit flag (--model, --context) is the consent to a risk setup would otherwise stop at; --yes alone is not.
@@ -5843,6 +5847,32 @@ def args_dropped(old: dict, cfg: dict) -> list[str]:
     return list(dict.fromkeys(f for f in flags(old) if f not in new))
 
 
+def split_custom_args(argv: list[str]) -> tuple[list[str], list[str]]:
+    """The setup arguments and the engine's own: everything after the first -- is appended to the model's args by
+    apply_custom_args, after setup's own choices.  A --bench-original-compat REMAINDER may start with --: it is not
+    the separator here.  An ordinary start keeps what was written; a setup run without the -- suffix drops those
+    options, and write_setup_config names them (args_dropped)."""
+    if "--" not in argv or "--bench-original-compat" in argv[:argv.index("--")]:
+        return list(argv), []
+    i = argv.index("--")
+    return argv[:i], argv[i + 1:]
+
+
+def apply_custom_args(cfg: dict, custom: list[str]) -> list[str]:
+    """The options after -- at the end of the config's args: the engine reads a flag it is given twice last-wins, so
+    a custom value overrides what setup chose for the same flag.  The warnings (flags setup sets as well) are
+    returned for the caller to print."""
+    warns = []
+    if not custom:
+        return warns
+    dup = list(dict.fromkeys(f for f in custom if f.startswith("--") and f in cfg.get("args", [])))
+    if dup:
+        warns.append("engine options after -- that setup sets as well: " + " ".join(dup) +
+                     " - yours are appended after them, and the engine uses them")
+    cfg["args"] = [*cfg.get("args", []), *custom]
+    return warns
+
+
 def write_setup_config(cfg_path: Path, cfg: dict, source: Path | None = None, gpus_chosen: bool = False) -> None:
     """Setup's run config, written over an earlier one for the same model without losing what the user added to it:
     the keys setup does not write are carried over (carry_over; `gpus_chosen`: this run chose its GPUs), and the
@@ -6208,6 +6238,12 @@ def finish_setup(a, cfg: dict, tag: str, port: int, adopted: Path | None, images
     free = saved_vram_free(cfg)                        # the same for the free VRAM the cache is sized from
     if free is not None and "--vram-free-mib" not in cfg["args"]:
         cfg["args"] = [*cfg["args"], "--vram-free-mib", free]
+    custom = list(getattr(a, "custom_args", []) or [])   # the options after --: last, after setup's own
+    if custom:
+        for line in apply_custom_args(cfg, custom):
+            warn(line)
+        ok("engine options after -- appended to the config's args (a setup run without them drops those): " +
+           " ".join(custom))
     write_setup_config(cfg_path, cfg, adopted if adopted is not None and adopted.name == cfg_path.name else None,
                        getattr(a, "gpus_chosen", False))
     script = None if PACKAGED else write_run_script(tag, cfg_path, port, cfg.get("open_browser") is not False)
@@ -6538,7 +6574,11 @@ def main() -> int:
                          "--clients N, --compare DIR). --bench is XeStrata's own measurement")
     ap.add_argument("--skip-build", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--image-text-encoder", help=argparse.SUPPRESS)   # removed: --images names the encoder
-    a = ap.parse_args()
+    argv, custom = split_custom_args(sys.argv[1:])   # everything after -- is the engine's own (finish_setup writes it)
+    a = ap.parse_args(argv)
+    if custom and not custom[0].startswith("--"):
+        ap.error("after -- every engine option starts with --, e.g. -- --kv-resident 20480")
+    a.custom_args = custom
     if a.license == "contrib-icpx":
         fail("--license contrib-icpx: the contrib-icpx mode (Intel oneAPI's icpx) was removed",
              "use --license contrib (contrib-llvm: intel/llvm, for Intel, AMD and NVIDIA GPUs), or --license free")
@@ -6607,6 +6647,10 @@ def main() -> int:
     if a.update:                                       # #475: update.sh - never starts the model
         return update_install(have)
     explicit = a.setup or a.model or a.family or a.check or a.no_start
+    if a.custom_args and not (a.setup or a.model or a.family or a.no_start):
+        fail("options after -- are written by a setup run",
+             "give them with --setup, or with the settings you set up with (--model ... --no-start writes them "
+             "without starting the model)")
     adopted = None                                     # the earlier install this copy is set up like
     if not have and not explicit:                      # a new copy of Strata (an update unzipped elsewhere): set it
         prev = previous_config(elsewhere, load_settings())   # up like the last one, from the files already here
@@ -7351,11 +7395,12 @@ def main() -> int:
     if a.browser is not None:                          # #609: only when given (else an earlier choice is carried over)
         cfg["open_browser"] = a.browser
     # #465: requests at once - written only when given (else an earlier "parallel" is carried over); a recommendation
-    streaming = "--kv-resident" in args
+    args_all = [*args, *getattr(a, "custom_args", [])]   # what the engine will actually run (the custom ones last)
+    streaming = "--kv-resident" in args_all
     if a.parallel is not None:
         if a.parallel >= 2:
             cfg["parallel"] = a.parallel
-            batch_mtp = "--mtp" in args and "--no-batch-mtp" not in args   # as serve/server.py's parallel_args
+            batch_mtp = "--mtp" in args_all and "--no-batch-mtp" not in args_all   # as serve/server.py's parallel_args
             for i, line in enumerate(parallel_note(a.parallel, gpu_expert_vram(gpu), MODELS[model]["arena_gb"], ctx, kv,
                                                    streaming, batch_mtp)):
                 (ok if i == 0 else warn)(line)

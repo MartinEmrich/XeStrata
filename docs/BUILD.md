@@ -35,6 +35,8 @@ setup checks the GPU, RAM and CPU, chooses a SYCL compiler and builds the engine
 **Afterwards**, `./setup.sh` starts the model right away.
 The README's `xestrata` options work the same with `./setup.sh`. The terminal chat is `.venv/bin/python chat.py`.
 
+Engine options that setup does not name go after a `--`: `./setup.sh --model Q2_0 --no-start -- --kv-resident 20480 --conversation-save DIR` appends them to the model's args after setup's own, and a flag given twice is used by the engine from its last value. An ordinary start keeps them; a setup run without the `--` suffix drops them and names them.
+
 **Updating**: run `./update.sh`. In a git checkout it runs `git pull`, then updates the engine, the Python packages and
 the model settings (it does not start the model). You can also download a new version, unpack it elsewhere and run
 `./setup.sh` there: the new copy finds `XeStrata-data` and runs with the same settings.
